@@ -1,13 +1,15 @@
 #include <iostream>
 #include <unistd.h>  // For sleep()
+#include <cstdlib>   // For rand()
 
 int main() {
     std::cout << "Arduino Simulator Running..." << std::endl;
-    
+
     while (true) {
-        std::cout << "Heartbeat" << std::endl;  // Just a visibility signal
+        int sensorValue = rand() % 100;  // Simulated sensor data
+        std::cout << "SENSOR_DATA: " << sensorValue << std::endl;
         std::cout.flush();
-        sleep(5);  // Delay of 5 seconds
+        sleep(1);  // Send data every second
     }
 
     return 0;
