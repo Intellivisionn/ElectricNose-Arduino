@@ -21,9 +21,9 @@ public:
 // BME680 Sensor Class
 class BME680Sensor : public SensorInterface {
 private:
-    int fd;               // File descriptor for I2C
+    int fd;
     uint8_t i2cAddress;
-    uint8_t channel;      // Multiplexer channel
+    uint8_t channel;
 public:
     BME680Sensor(uint8_t address = 0x76, uint8_t ch = 1) {
         i2cAddress = address;
@@ -31,20 +31,26 @@ public:
     }
 
     void begin(int multiplexer_fd) override {
-        // Select the correct multiplexer channel
         selectTCAChannel(multiplexer_fd, channel);
-        
-        // Setup I2C communication
         fd = wiringPiI2CSetup(i2cAddress);
         if (fd == -1) {
             std::cerr << "Error initializing BME680 sensor!" << std::endl;
             exit(1);
         }
-        std::cout << "✅ BME680 initialized on Channel " << (int)channel << "!" << std::endl;
+        std::cout << "BME680 initialized on Channel " << (int)channel << "." << std::endl;
+
+        // Initialize BME680 for data readings
+        wiringPiI2CWriteReg8(fd, 0x74, 0x89);  // Control humidity register
+        wiringPiI2CWriteReg8(fd, 0x72, 0x01);  // Control pressure register
+        wiringPiI2CWriteReg8(fd, 0x71, 0x10);  // Control gas register
+        usleep(100000);
     }
 
     void readData() override {
-        int temp_raw = wiringPiI2CReadReg16(fd, 0x1D);  // Corrected register for temperature
+        selectTCAChannel(fd, channel);
+        usleep(100000);
+
+        int temp_raw = wiringPiI2CReadReg16(fd, 0x22);
         int humidity_raw = wiringPiI2CReadReg16(fd, 0x25);
         int pressure_raw = wiringPiI2CReadReg16(fd, 0x28);
         int gas_resistance_raw = wiringPiI2CReadReg16(fd, 0x2B);
@@ -54,7 +60,7 @@ public:
         float pressure = pressure_raw / 100.0;
         float gas_resistance = gas_resistance_raw / 1000.0;
 
-        std::cout << "🌡️  BME680 - Temp: " << temperature << "°C, Humidity: " << humidity
+        std::cout << "BME680 - Temp: " << temperature << "°C, Humidity: " << humidity
                   << "%, Pressure: " << pressure << " hPa, Gas Resistance: "
                   << gas_resistance << " kOhms" << std::endl;
     }
@@ -73,54 +79,54 @@ public:
     }
 
     void begin(int multiplexer_fd) override {
-        // Select the correct multiplexer channel
         selectTCAChannel(multiplexer_fd, channel);
-        
-        // Setup I2C communication
         fd = wiringPiI2CSetup(i2cAddress);
         if (fd == -1) {
             std::cerr << "Error initializing SGP30 sensor!" << std::endl;
             exit(1);
         }
-        std::cout << "✅ SGP30 initialized on Channel " << (int)channel << "!" << std::endl;
+        std::cout << "SGP30 initialized on Channel " << (int)channel << "." << std::endl;
+
+        // Initialize SGP30 for proper readings
+        wiringPiI2CWriteReg8(fd, 0x20, 0x03);
+        usleep(200000);
+        wiringPiI2CWriteReg8(fd, 0x20, 0x08);
+        usleep(100000);
     }
 
     void readData() override {
-        int tvoc = wiringPiI2CReadReg16(fd, 0x00);  // Corrected register
-        int eco2 = wiringPiI2CReadReg16(fd, 0x01);
+        selectTCAChannel(fd, channel);
+        usleep(100000);
 
-        std::cout << "🛑 SGP30 - TVOC: " << tvoc << " ppb, eCO2: " << eco2 << " ppm" << std::endl;
+        wiringPiI2CWrite(fd, 0x20);
+        usleep(100000);
+        int tvoc = wiringPiI2CReadReg16(fd, 0x21);
+        int eco2 = wiringPiI2CReadReg16(fd, 0x22);
+
+        std::cout << "SGP30 - TVOC: " << tvoc << " ppb, eCO2: " << eco2 << " ppm" << std::endl;
     }
 };
-
-// Create sensor objects
-BME680Sensor bme680(0x76, 1);  // Channel 1
-SGP30Sensor sgp30(0x58, 2);    // Channel 2
-
-// Function to initialize all sensors
-void initializeSensors(int multiplexer_fd, std::vector<SensorInterface*>& sensors) {
-    for (auto& sensor : sensors) {
-        sensor->begin(multiplexer_fd);
-    }
-}
 
 int main() {
     std::cout << "Initializing I2C sensors..." << std::endl;
     wiringPiSetup();
-
-    // Initialize I2C multiplexer
     int multiplexer_fd = wiringPiI2CSetup(TCA_ADDRESS);
+
     if (multiplexer_fd == -1) {
         std::cerr << "Error: Failed to initialize I2C multiplexer!" << std::endl;
         return 1;
     }
 
+    BME680Sensor bme680(0x76, 1);
+    SGP30Sensor sgp30(0x58, 2);
     std::vector<SensorInterface*> sensors = {&bme680, &sgp30};
 
-    initializeSensors(multiplexer_fd, sensors);
+    for (auto& sensor : sensors) {
+        sensor->begin(multiplexer_fd);
+    }
 
     while (true) {
-        std::cout << "\n🔄 Reading sensor data..." << std::endl;
+        std::cout << "\nReading sensor data..." << std::endl;
         for (auto& sensor : sensors) {
             sensor->readData();
         }
