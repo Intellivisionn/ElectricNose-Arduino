@@ -1,137 +1,197 @@
-#include <iostream>
-#include <unistd.h>       // For sleep()
-#include <wiringPiI2C.h>  // For I2C communication
-#include <wiringPi.h>     // For GPIO handling
-#include <vector>
+#include "libraries/Adafruit_BME680/Adafruit_BME680.h"
+#include "libraries/Adafruit_SGP30/Adafruit_SGP30.h"
+#include "libraries/WiringPi/WiringPi.h"  // If needed
+#include <Wire.h>
+
 
 #define TCA_ADDRESS 0x70  // TCA9548A Multiplexer I2C address
 
-// Function to select a channel on the TCA9548A multiplexer
-void selectTCAChannel(int fd, uint8_t channel) {
-    wiringPiI2CWrite(fd, 1 << channel);
+// Function to select channel on TCA9548A
+void selectTCAChannel(uint8_t channel) {
+    Wire.beginTransmission(TCA_ADDRESS);
+    Wire.write(1 << channel);
+    Wire.endTransmission();
 }
 
 // Sensor Interface
 class SensorInterface {
 public:
-    virtual void begin(int multiplexer_fd) = 0;
+    virtual void begin() = 0;
     virtual void readData() = 0;
 };
 
 // BME680 Sensor Class
 class BME680Sensor : public SensorInterface {
 private:
-    int fd;
+    Adafruit_BME680 bme;
+    TwoWire* wire;
     uint8_t i2cAddress;
-    uint8_t channel;
 public:
-    BME680Sensor(uint8_t address = 0x76, uint8_t ch = 1) {
-        i2cAddress = address;
-        channel = ch;
+    BME680Sensor(TwoWire* wireInstance, uint8_t address = 0x76) {
+        this->wire = wireInstance;
+        this->i2cAddress = address;
     }
 
-    void begin(int multiplexer_fd) override {
-        selectTCAChannel(multiplexer_fd, channel);
-        fd = wiringPiI2CSetup(i2cAddress);
-        if (fd == -1) {
-            std::cerr << "Error initializing BME680 sensor!" << std::endl;
-            exit(1);
+    void begin() override {
+        selectTCAChannel(1);  // Select BME680 on TCA Multiplexer
+        if (!bme.begin(i2cAddress, wire)) {
+            Serial.println("BME680 not found, check wiring!");
+            while (1);
         }
-        std::cout << "BME680 initialized on Channel " << (int)channel << "." << std::endl;
+        Serial.println("BME680 initialized!");
 
-        // Initialize BME680 for data readings
-        wiringPiI2CWriteReg8(fd, 0x74, 0x89);  // Control humidity register
-        wiringPiI2CWriteReg8(fd, 0x72, 0x01);  // Control pressure register
-        wiringPiI2CWriteReg8(fd, 0x71, 0x10);  // Control gas register
-        usleep(100000);
+        // Configure BME680
+        bme.setTemperatureOversampling(BME680_OS_8X);
+        bme.setHumidityOversampling(BME680_OS_2X);
+        bme.setPressureOversampling(BME680_OS_4X);
+        bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+        bme.setGasHeater(320, 150); // 320°C for 150ms
     }
 
     void readData() override {
-        selectTCAChannel(fd, channel);
-        usleep(100000);
+        selectTCAChannel(1);  // Selec:\Users\jakub\Desktop\ElectricNose-Arduino\arduino_simct BME680 on TCA Multiplexer
+        if (!bme.performReading()) {
+            Serial.println("Failed to read from BME680!");
+            return;
+        }
+        Serial.print("BME680 - Temp: ");
+        Serial.print(bme.temperature);
+        Serial.print("°C, Humidity: ");
+        Serial.print(bme.humidity);
+        Serial.print("%, Pressure: ");
+        Serial.print(bme.pressure / 100.0);
+        Serial.print(" hPa, Gas Resistance: ");
+        Serial.print(bme.gas_resistance / 1000.0);
+        Serial.println(" kOhms");
 
-        int temp_raw = wiringPiI2CReadReg16(fd, 0x22);
-        int humidity_raw = wiringPiI2CReadReg16(fd, 0x25);
-        int pressure_raw = wiringPiI2CReadReg16(fd, 0x28);
-        int gas_resistance_raw = wiringPiI2CReadReg16(fd, 0x2B);
-
-        float temperature = temp_raw / 100.0;
-        float humidity = humidity_raw / 100.0;
-        float pressure = pressure_raw / 100.0;
-        float gas_resistance = gas_resistance_raw / 1000.0;
-
-        std::cout << "BME680 - Temp: " << temperature << "°C, Humidity: " << humidity
-                  << "%, Pressure: " << pressure << " hPa, Gas Resistance: "
-                  << gas_resistance << " kOhms" << std::endl;
+        // Send data to Raspberry Pi for ML Processing
+        Serial.print("DATA,");
+        Serial.print(bme.gas_resistance);
+        Serial.print(",");
     }
 };
 
 // SGP30 Sensor Class
 class SGP30Sensor : public SensorInterface {
 private:
-    int fd;
-    uint8_t i2cAddress;
-    uint8_t channel;
+    Adafruit_SGP30 sgp;
+    TwoWire* wire;
 public:
-    SGP30Sensor(uint8_t address = 0x58, uint8_t ch = 2) {
-        i2cAddress = address;
-        channel = ch;
+    SGP30Sensor(TwoWire* wireInstance) {
+        this->wire = wireInstance;
     }
 
-    void begin(int multiplexer_fd) override {
-        selectTCAChannel(multiplexer_fd, channel);
-        fd = wiringPiI2CSetup(i2cAddress);
-        if (fd == -1) {
-            std::cerr << "Error initializing SGP30 sensor!" << std::endl;
-            exit(1);
+    void begin() override {
+        selectTCAChannel(2);  // Select SGP30 on TCA Multiplexer
+        if (!sgp.begin(*wire)) {
+            Serial.println("SGP30 not found, check wiring!");
+            while (1);
         }
-        std::cout << "SGP30 initialized on Channel " << (int)channel << "." << std::endl;
+        Serial.println("SGP30 initialized!");
 
-        // Initialize SGP30 for proper readings
-        wiringPiI2CWriteReg8(fd, 0x20, 0x03);
-        usleep(200000);
-        wiringPiI2CWriteReg8(fd, 0x20, 0x08);
-        usleep(100000);
+        // Set IAQ Baseline (from Python script)
+        sgp.setIAQBaseline(0x8973, 0x8AAE);
+
+        // Set Humidity Compensation (from Python script)
+        uint16_t humidity_comp = sgp.getHumidityCompensation(22.1, 44.0);
+        sgp.setHumidityCompensation(humidity_comp);
     }
 
     void readData() override {
-        selectTCAChannel(fd, channel);
-        usleep(100000);
+        selectTCAChannel(2);  // Select SGP30 on TCA Multiplexer
+        if (!sgp.IAQmeasure()) {
+            Serial.println("Failed to read from SGP30!");
+            return;
+        }
+        Serial.print("SGP30 - TVOC: ");
+        Serial.print(sgp.TVOC);
+        Serial.print(" ppb, eCO2: ");
+        Serial.print(sgp.eCO2);
+        Serial.println(" ppm");
 
-        wiringPiI2CWrite(fd, 0x20);
-        usleep(100000);
-        int tvoc = wiringPiI2CReadReg16(fd, 0x21);
-        int eco2 = wiringPiI2CReadReg16(fd, 0x22);
-
-        std::cout << "SGP30 - TVOC: " << tvoc << " ppb, eCO2: " << eco2 << " ppm" << std::endl;
+        // Send data to Raspberry Pi for ML Processing
+        Serial.print(sgp.eCO2);
+        Serial.print(",");
+        Serial.print(sgp.TVOC);
+        Serial.println();
     }
 };
 
-int main() {
-    std::cout << "Initializing I2C sensors..." << std::endl;
-    wiringPiSetup();
-    int multiplexer_fd = wiringPiI2CSetup(TCA_ADDRESS);
-
-    if (multiplexer_fd == -1) {
-        std::cerr << "Error: Failed to initialize I2C multiplexer!" << std::endl;
-        return 1;
+// Grove Multichannel Gas Sensor Class
+class GroveGasSensor : public SensorInterface {
+private:
+    GAS_GMXXX<2> gas;
+    TwoWire* wire;
+    uint8_t i2cAddress;
+public:
+    GroveGasSensor(TwoWire* wireInstance, uint8_t address = 0x08) {
+        this->wire = wireInstance;
+        this->i2cAddress = address;
     }
 
-    BME680Sensor bme680(0x76, 1);
-    SGP30Sensor sgp30(0x58, 2);
-    std::vector<SensorInterface*> sensors = {&bme680, &sgp30};
-
-    for (auto& sensor : sensors) {
-        sensor->begin(multiplexer_fd);
+    void begin() override {
+        gas.begin(*wire, i2cAddress);
+        Serial.println("Grove Multichannel Gas Sensor initialized!");
     }
 
-    while (true) {
-        std::cout << "\nReading sensor data..." << std::endl;
-        for (auto& sensor : sensors) {
-            sensor->readData();
-        }
-        sleep(2);
+    void readData() override {
+        Serial.print("Grove Gas Sensor - CO: ");
+        Serial.print(gas.getGM102B());
+        Serial.print(" ppm, NO2: ");
+        Serial.print(gas.getGM302B());
+        Serial.print(" ppm, NH3: ");
+        Serial.print(gas.getGM502B());
+        Serial.print(" ppm, CH4: ");
+        Serial.print(gas.getGM702B());
+        Serial.println(" ppm");
     }
+};
 
-    return 0;
+// Create sensor objects with configurable I2C parameters
+BME680Sensor bme680(&Wire, 0x76);
+SGP30Sensor sgp30(&Wire);
+GroveGasSensor groveGas(&Wire, 0x08);
+
+void setup() {
+    Serial.begin(115200);
+    while (!Serial);
+
+    Serial.println("Initializing I2C sensors...");
+    Wire.begin();
+    /*
+    void startSensors()
+    for(int i=0; i<3;i++)
+    {
+      SesorInterface.begin();
+    }
+    */
+    // Initialize sensors
+    
+    bme680.begin();
+    sgp30.begin();
+    //groveGas.begin();
 }
+
+void loop() {
+    Serial.println("\nReading sensor data...");
+
+    // Read and send sensor data to Raspberry Pi
+    bme680.readData();
+    sgp30.readData();
+    //groveGas.readData();
+
+    delay(2000);
+}
+
+
+/*
+This code can be used in Python, to directly read the data sent from here:
+
+import serial
+ser = serial.Serial('/dev/ttyUSB0', 115200)
+while True:
+    data = ser.readline().decode().strip()
+    print("Received:", data)
+
+
+*/
